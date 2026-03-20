@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="Radha Jap">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060D1F">
-<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="/Radhakripa/manifest.json">
 <title>Radha Naam Jap</title>
 <link href="https://fonts.googleapis.com/css2?family=Tiro+Devanagari+Hindi&family=Hind+Siliguri:wght@400;600;700&family=Cinzel+Decorative:wght@400;700&family=EB+Garamond:wght@400;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <!-- Firebase SDKs -->
@@ -1154,11 +1154,12 @@ function uBStats(){
     return null;
   }
 
-  // Find earliest date across brahma logs and jap history
-  const allKeys=Object.keys(S.brahma||{});
-  const histKeys=Object.keys(S.history||{}).filter(k=>/^\d{4}-\d{2}-\d{2}$/.test(k));
-  const combined=[...allKeys,...histKeys];
-  const earliest=combined.length?combined.sort()[0]:todayStr;
+  // Use ONLY brahma logs to find start date — never jap history
+  // This prevents counting years of jap as brahmacharya days
+  const brahmaKeys=Object.keys(S.brahma||{}).filter(k=>/^\d{4}-\d{2}-\d{2}$/.test(k));
+  // Default start: March 16 2025 (when user started tracking)
+  const BRAHMA_START=S.brahmaStart||'2025-03-16';
+  const earliest=brahmaKeys.length?[...brahmaKeys,BRAHMA_START].sort()[0]:BRAHMA_START;
 
   // Build full date range from earliest to yesterday
   const dateList=[];
@@ -1174,11 +1175,17 @@ function uBStats(){
   const total=dateList.length;
   const pct=total>0?Math.round(maint/total*100):0;
 
-  // Current streak — count backwards from yesterday
-  let cs=0;const d2=new Date(today);
+  // Current streak — count today + backwards
+  let cs=0;
+  // Include today if brahma logged as maintained, or if brahma start date is today
+  const todayStatus=S.brahma[todayStr]?S.brahma[todayStr].status:null;
+  if(todayStatus==='m') cs=1;
+  const d2=new Date(today);
   while(cs<9999){
     d2.setDate(d2.getDate()-1);
     const k=d2.toISOString().split('T')[0];
+    // Stop counting before the brahma start date
+    if(k<BRAHMA_START) break;
     if(getEffectiveStatus(k)==='m'){cs++;}else break;
   }
 
@@ -1371,6 +1378,8 @@ window.addEventListener('load',()=>{
   ['2025-03-16','2025-03-17','2025-03-18'].forEach(k=>{
     if(!S.brahma[k])S.brahma[k]={status:'m',count:0};
   });
+  // Set brahmacharya start date if not already set
+  if(!S.brahmaStart) S.brahmaStart='2025-03-16';
   save();
 
   lmc=Math.floor(gTod()/(S.ms||108));
@@ -1599,7 +1608,9 @@ function fbDebouncedPush(){
 // ══ SUNRISE / SUNSET ══
 function calcSunTimes(lat,lng,date){
   const rad=Math.PI/180;
-  const JD=(date.getTime()/86400000)+2440587.5;
+  // Use UTC noon for stable calculation
+  const noon=new Date(Date.UTC(date.getFullYear(),date.getMonth(),date.getDate(),12,0,0));
+  const JD=(noon.getTime()/86400000)+2440587.5;
   const n=JD-2451545.0;
   const L=(280.46+0.9856474*n)%360;
   const g=(357.528+0.9856003*n)%360;
@@ -1613,18 +1624,21 @@ function calcSunTimes(lat,lng,date){
   const GMST=6.697375+0.0657098242*n+12;
   const LMST=(GMST*15+lng)%360;
   const transit=(360-LMST+lambda)/15;
-  const sunrise=transit-HA/15;
-  const sunset=transit+HA/15;
-  function toLocal(utcH){
-    const off=date.getTimezoneOffset()/(-60);
-    let h=(utcH+24+off)%24;
-    const hh=Math.floor(h),mm=Math.round((h-hh)*60);
-    const finalH=mm===60?hh+1:hh,finalM=mm===60?0:mm;
-    const ap=finalH>=12?'PM':'AM',h12=((finalH%12)||12);
-    return String(h12).padStart(2,'0')+':'+String(finalM).padStart(2,'0')+' '+ap;
+  const sunriseUTC=transit-HA/15;
+  const sunsetUTC=transit+HA/15;
+  // Convert UTC decimal hours -> local Date -> format
+  function utcHToDate(utcH){
+    const ms=utcH*3600000;
+    return new Date(Date.UTC(date.getFullYear(),date.getMonth(),date.getDate())+ms);
   }
-  function toLocalRaw(utcH){const off=date.getTimezoneOffset()/(-60);return(utcH+24+off)%24;}
-  return{sunriseH:toLocalRaw(sunrise),sunsetH:toLocalRaw(sunset),sunrise:toLocal(sunrise),sunset:toLocal(sunset)};
+  function fmtDate(d){
+    let h=d.getHours(),m=d.getMinutes();
+    const ap=h>=12?'PM':'AM',h12=((h%12)||12);
+    return String(h12).padStart(2,'0')+':'+String(m).padStart(2,'0')+' '+ap;
+  }
+  function rawH(d){return d.getHours()+d.getMinutes()/60;}
+  const srD=utcHToDate(sunriseUTC), ssD=utcHToDate(sunsetUTC);
+  return{sunriseH:rawH(srD),sunsetH:rawH(ssD),sunrise:fmtDate(srD),sunset:fmtDate(ssD)};
 }
 
 function fmtHour(h){
