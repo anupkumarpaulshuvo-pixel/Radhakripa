@@ -736,7 +736,8 @@ let S={
   email:'',
   history:{},h28:{},
   stotrams:{},brahma:{},customSt:[],
-  timerHistory:{}  // { "2025-03-15": seconds }
+  timerHistory:{},
+  syncBaseline:{},syncBaseline28:{},syncBaselineTimer:{},syncBaselineInit:false
 };
 
 function getTk(){const d=new Date();const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day;}
@@ -750,7 +751,26 @@ function load(){
   if(!S.brahma)S.brahma={};
   if(!S.customSt)S.customSt=[];
   if(!S.timerHistory)S.timerHistory={};
+  // Init sync baselines on first load with new code (device-local, never sent to Firebase)
+  if(!S.syncBaselineInit){
+    S.syncBaseline=JSON.parse(JSON.stringify(S.history||{}));
+    S.syncBaseline28=JSON.parse(JSON.stringify(S.h28||{}));
+    S.syncBaselineTimer=JSON.parse(JSON.stringify(S.timerHistory||{}));
+    S.syncBaselineInit=true;
+  }
   STLIST.forEach(x=>{if(!S.stotrams[x.id])S.stotrams[x.id]={};});
+}
+
+// Merge remote counts with local offline delta
+// merged[day] = remote[day] + max(0, local[day] - baseline[day])
+function mergeWithDelta(local,baseline,remote){
+  const result={};
+  const keys=new Set([...Object.keys(local||{}),...Object.keys(baseline||{}),...Object.keys(remote||{})]);
+  keys.forEach(k=>{
+    const loc=local[k]||0,base=baseline[k]||0,rem=remote[k]||0;
+    result[k]=rem+Math.max(0,loc-base);
+  });
+  return result;
 }
 function save(){try{localStorage.setItem('rjap5',JSON.stringify(S));}catch(e){}}
 function gTod(){return S.history[S.tk]||0;}
@@ -1640,6 +1660,11 @@ async function fbPushSilent(){
       device: navigator.userAgent.slice(0,80)
     };
     await fbDb.collection('users').doc(fbUser.uid).collection('data').doc('main').set(payload,{merge:false});
+    // After successful push, update baselines so next merge starts from here
+    S.syncBaseline=JSON.parse(JSON.stringify(S.history||{}));
+    S.syncBaseline28=JSON.parse(JSON.stringify(S.h28||{}));
+    S.syncBaselineTimer=JSON.parse(JSON.stringify(S.timerHistory||{}));
+    save();
     // Update sync status quietly
     const now=new Date().toLocaleTimeString();
     const el=document.getElementById('fbSyncStatus');
@@ -1668,6 +1693,11 @@ async function fbPush(){
       device: navigator.userAgent.slice(0,80)
     };
     await fbDb.collection('users').doc(fbUser.uid).collection('data').doc('main').set(payload,{merge:false});
+    // Update baselines after successful manual upload
+    S.syncBaseline=JSON.parse(JSON.stringify(S.history||{}));
+    S.syncBaseline28=JSON.parse(JSON.stringify(S.h28||{}));
+    S.syncBaselineTimer=JSON.parse(JSON.stringify(S.timerHistory||{}));
+    save();
     const now=new Date().toLocaleString();
     document.getElementById('fbSyncStatus').textContent='⬆️ Uploaded: '+now;
     document.getElementById('fbSyncStatus').style.color='var(--a2)';
@@ -1683,25 +1713,8 @@ async function fbPull(){
   if(!fbUser){ toast('Please sign in first'); return; }
   try{
     const doc=await fbDb.collection('users').doc(fbUser.uid).collection('data').doc('main').get();
-    if(!doc.exists){
-      toast('No cloud data found. Upload first. 📤');
-      return;
-    }
-    const d=doc.data();
-    if(d.history)   S.history=d.history;
-    if(d.h28)       S.h28=d.h28;
-    if(d.stotrams)  S.stotrams=d.stotrams;
-    if(d.brahma)    S.brahma=d.brahma;
-    if(d.customSt)  S.customSt=d.customSt;
-    if(d.timerHistory) S.timerHistory=d.timerHistory;
-    if(d.ms)        S.ms=d.ms;
-    if(d.dt!==undefined) S.dt=d.dt;
-    if(d.lt!==undefined) S.lt=d.lt;
-    if(d.cfg)       S.cfg={...S.cfg,...d.cfg};
-    save();
-    lmc=Math.floor(gTod()/(S.ms||108));
-    lm28=Math.floor((S.h28[S.tk]||0)/(S.ms||108));
-    ua(); renderSt(); u28(); renderBcal(); renderCal(); uStats();
+    if(!doc.exists){ toast('No cloud data found. Upload first. 📤'); return; }
+    fbApplyRemote(doc.data()); // delta-merge: adds local offline japs on top of cloud data
     const now=new Date().toLocaleString();
     document.getElementById('fbSyncStatus').textContent='⬇️ Downloaded: '+now;
     document.getElementById('fbSyncStatus').style.color='var(--green)';
@@ -1744,19 +1757,38 @@ function fbAutoSync(){
   }
 }
 
-// Apply remote data from another device
+// Apply remote data — delta-merge counts, overwrite settings
 function fbApplyRemote(d){
-  if(d.history)      S.history=d.history;
-  if(d.h28)          S.h28=d.h28;
+  let hasDelta=false;
+  if(d.history){
+    const merged=mergeWithDelta(S.history,S.syncBaseline||{},d.history);
+    // Check if local had extra offline japs to contribute
+    for(const k in merged){if((merged[k]||0)>(d.history[k]||0)){hasDelta=true;break;}}
+    S.history=merged;
+    S.syncBaseline=JSON.parse(JSON.stringify(merged));
+  }
+  if(d.h28){
+    const merged28=mergeWithDelta(S.h28,S.syncBaseline28||{},d.h28);
+    for(const k in merged28){if((merged28[k]||0)>(d.h28[k]||0)){hasDelta=true;break;}}
+    S.h28=merged28;
+    S.syncBaseline28=JSON.parse(JSON.stringify(merged28));
+  }
+  if(d.timerHistory){
+    const mergedT=mergeWithDelta(S.timerHistory,S.syncBaselineTimer||{},d.timerHistory);
+    S.timerHistory=mergedT;
+    S.syncBaselineTimer=JSON.parse(JSON.stringify(mergedT));
+  }
+  // Settings — just overwrite
   if(d.stotrams)     S.stotrams=d.stotrams;
   if(d.brahma)       S.brahma=d.brahma;
   if(d.customSt)     S.customSt=d.customSt;
-  if(d.timerHistory) S.timerHistory=d.timerHistory;
   if(d.ms)           S.ms=d.ms;
   if(d.dt!==undefined) S.dt=d.dt;
   if(d.lt!==undefined) S.lt=d.lt;
   if(d.cfg)          S.cfg={...S.cfg,...d.cfg};
   save();
+  // If this device had offline deltas, push the merged total back so other devices update too
+  if(hasDelta) setTimeout(()=>fbPushSilent(),600);
   lmc=Math.floor(gTod()/(S.ms||108));
   lm28=Math.floor((S.h28[S.tk]||0)/(S.ms||108));
   ua(); renderSt(); u28(); renderBcal(); renderCal(); uStats();
