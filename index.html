@@ -490,9 +490,9 @@ body::before{content:'';position:fixed;top:50%;left:50%;transform:translate(-50%
     <div class="bcal" id="bcal"></div>
   </div>
   <div class="sc">
-    <h3>📅 Log Today</h3>
-    <button class="blb gb" onclick="lb('m')">✅ Maintained Today</button>
-    <div class="bcr"><label>Count if broke:</label><input type="number" class="bci" id="bci" value="1" min="1"></div>
+    <h3>⚠️ Mark as Broken</h3>
+    <div style="font-size:11px;color:var(--td);margin-bottom:9px">Days are maintained automatically. Only tap below if you broke it.</div>
+    <div class="bcr"><label>Count:</label><input type="number" class="bci" id="bci" value="1" min="1"></div>
     <button class="blb rb2" onclick="lb('b')">❌ Broke Today</button>
   </div>
   <div class="sc">
@@ -702,6 +702,21 @@ body::before{content:'';position:fixed;top:50%;left:50%;transform:translate(-50%
     <p class="mdd" id="moD"></p>
     <button class="mdb cf" id="moCf">Yes, Reset</button>
     <button class="mdb ca" onclick="cm()">Cancel</button>
+  </div>
+</div>
+
+<!-- BRAHMACHARYA DAY EDIT MODAL -->
+<div class="mo" id="bcmo">
+  <div class="md2">
+    <h3 id="bcmoT">Edit Day</h3>
+    <p class="mdd" id="bcmoD"></p>
+    <div id="bcmoBrkRow" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+      <label style="font-size:13px;color:var(--tl);flex:1">Count:</label>
+      <input type="number" id="bcmoCnt" value="1" min="1" style="width:70px;background:rgba(0,0,0,0.3);border:1px solid rgba(231,76,60,0.3);border-radius:9px;padding:7px 11px;color:var(--tl);font-size:15px;text-align:center;font-family:'Inter',sans-serif;">
+    </div>
+    <button class="mdb cf" id="bcmoBrk">❌ Mark as Broken</button>
+    <button class="mdb" id="bcmoRst" style="background:rgba(46,204,113,0.15);color:var(--green);border:1px solid rgba(46,204,113,0.3);margin-bottom:9px;">✅ Restore as Maintained</button>
+    <button class="mdb ca" onclick="document.getElementById('bcmo').classList.remove('show')">Cancel</button>
   </div>
 </div>
 
@@ -1161,6 +1176,7 @@ function delSt(id){
 }
 
 // ══ BRAHMACHARYA ══
+const BRAHMA_START='2026-03-16';
 let bcd=new Date();
 const MN=['January','February','March','April','May','June','July','August','September','October','November','December'];
 function renderBcal(){
@@ -1172,32 +1188,63 @@ function renderBcal(){
   for(let d=1;d<=dim;d++){
     const key=yr+'-'+String(mo+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
     const en=S.brahma[key];
+    const isBroken=en&&en.status==='b';
+    const isActive=key>=BRAHMA_START&&key<=ts;
     const c=document.createElement('div');
-    c.className='bcl '+(en?(en.status==='m'?'m':'b'):'e');
+    c.className='bcl '+(isActive?(isBroken?'b':'m'):'e');
     if(key===ts)c.classList.add('tc');
     c.innerHTML='<span style="font-size:11px">'+d+'</span>';
-    if(en&&en.status==='b'&&en.count>1)c.innerHTML+='<span style="font-size:8px;display:block">'+en.count+'x</span>';
+    if(isBroken&&en.count>1)c.innerHTML+='<span style="font-size:8px;display:block">'+en.count+'x</span>';
+    if(isActive){c.style.cursor='pointer';(function(k,brk,cnt){c.onclick=function(){openBcDay(k,brk,cnt);};})(key,isBroken,en&&en.count||1);}
     g.appendChild(c);
   }
   uBStats();
 }
 function cbm(d){bcd.setMonth(bcd.getMonth()+d);renderBcal();}
+function openBcDay(key,isBroken,cnt){
+  const parts=key.split('-');
+  const label=MN[parseInt(parts[1])-1]+' '+parseInt(parts[2])+', '+parts[0];
+  document.getElementById('bcmoT').textContent=(isBroken?'❌ Broken — ':'✅ Maintained — ')+label;
+  document.getElementById('bcmoD').textContent=isBroken?'Tap below to restore or update the count.':'Tap below to mark this day as broken.';
+  document.getElementById('bcmoCnt').value=cnt||1;
+  document.getElementById('bcmoBrkRow').style.display=isBroken?'none':'flex';
+  document.getElementById('bcmoRst').style.display=isBroken?'':'none';
+  document.getElementById('bcmoBrk').style.display=isBroken?'none':'';
+  document.getElementById('bcmoBrk').onclick=function(){
+    S.brahma[key]={status:'b',count:parseInt(document.getElementById('bcmoCnt').value)||1};
+    save();fbDebouncedPush();renderBcal();
+    document.getElementById('bcmo').classList.remove('show');
+    toast('Marked as broken 🙏');
+  };
+  document.getElementById('bcmoRst').onclick=function(){
+    delete S.brahma[key];
+    save();fbDebouncedPush();renderBcal();
+    document.getElementById('bcmo').classList.remove('show');
+    toast('✅ Restored as maintained!');
+  };
+  document.getElementById('bcmo').classList.add('show');
+}
 function lb(st){
   const cnt=parseInt(document.getElementById('bci').value)||1;
-  S.brahma[S.tk]={status:st,count:st==='m'?0:cnt};
+  if(st==='b'){S.brahma[S.tk]={status:'b',count:cnt};}
+  else{delete S.brahma[S.tk];}
   save(); fbDebouncedPush(); renderBcal();
-  toast(st==='m'?'✅ Maintained! Stay strong 💪':'Logged. Keep going 🙏');
+  toast(st==='b'?'Logged. Keep going 🙏':'✅ Day restored as maintained!');
 }
 function uBStats(){
-  const en=Object.values(S.brahma);
-  const maint=en.filter(e=>e.status==='m').length;
-  const brok=en.filter(e=>e.status==='b').length;
-  const tmc=en.filter(e=>e.status==='b').reduce((s,e)=>s+e.count,0);
-  const pct=en.length>0?Math.round(maint/en.length*100):0;
-  let cs=0;const d=new Date();
-  while(cs<999){const k=d.toISOString().split('T')[0];if(S.brahma[k]&&S.brahma[k].status==='m'){cs++;d.setDate(d.getDate()-1);}else break;}
+  const startD=new Date(BRAHMA_START);startD.setHours(0,0,0,0);
+  const todayD=new Date();todayD.setHours(0,0,0,0);
+  const totalDays=Math.max(0,Math.round((todayD-startD)/86400000)+1);
+  const brok=Object.values(S.brahma).filter(e=>e.status==='b').length;
+  const maint=totalDays-brok;
+  const tmc=Object.values(S.brahma).filter(e=>e.status==='b').reduce((s,e)=>s+e.count,0);
+  const pct=totalDays>0?Math.round(maint/totalDays*100):0;
+  let cs=0;const d=new Date();d.setHours(0,0,0,0);
+  while(cs<999){const k=d.toISOString().split('T')[0];if(k<BRAHMA_START)break;const en=S.brahma[k];if(!en||en.status!=='b'){cs++;d.setDate(d.getDate()-1);}else break;}
   let bs=0,run=0;
-  Object.keys(S.brahma).sort().forEach(k=>{if(S.brahma[k].status==='m'){run++;if(run>bs)bs=run;}else run=0;});
+  const allDays=[];const cur=new Date(BRAHMA_START);cur.setHours(0,0,0,0);
+  while(cur<=todayD){allDays.push(cur.toISOString().split('T')[0]);cur.setDate(cur.getDate()+1);}
+  allDays.forEach(k=>{const en=S.brahma[k];if(!en||en.status!=='b'){run++;if(run>bs)bs=run;}else run=0;});
   document.getElementById('bcs').textContent=cs;document.getElementById('bbs').textContent=bs;
   document.getElementById('bbc').textContent=brok;document.getElementById('bmd').textContent=maint;
   document.getElementById('bbd').textContent=brok;document.getElementById('btm').textContent=tmc;
@@ -1744,7 +1791,7 @@ function calcSunTimes(lat, lng, date){
   const cosHA = (Math.cos(90.833*rad) - Math.sin(lat*rad)*sinDec) / (Math.cos(lat*rad)*Math.cos(dec));
   if(cosHA > 1 || cosHA < -1) return null; // polar day/night
   const HA = Math.acos(cosHA)/rad;
-  const GMST = 6.697375 + 0.0657098242*n + 12;
+  const GMST = 6.697375 + 0.0657098242*n;
   const LMST = (GMST*15 + lng) % 360;
   const transit = (360 - LMST + lambda) / 15;
   const sunrise = transit - HA/15;
